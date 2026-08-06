@@ -1,0 +1,16 @@
+spring:
+  config:
+    import: optional:file:env.properties
+embabel:
+  models:
+    default-llm: ${AZURE_DEPLOYMENT_NAME}
+  agent:
+    platform:
+      models:
+        openai:
+          api-key: ${OPENAI_API_KEY}
+          base-url: ${OPENAI_BASE_URL}
+          completions: ${OPENAI_COMPLETIONS_PATH}
+github:
+    token: ${GITHUB_TOKEN:}
+    endpoint: ${GITHUB_ENDPOINT:}
