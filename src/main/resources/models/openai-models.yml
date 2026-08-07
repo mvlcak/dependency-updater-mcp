@@ -1,0 +1,28 @@
+native_support_defaults:
+  structured_output:
+    supported: true
+    strategy: "response_format"
+    strict: false
+    prompt_instructions: "include"
+    options:
+      response_format_field: "response_format"
+      type_field: "type"
+      type_value: "json_schema"
+      json_schema_field: "json_schema"
+      name_field: "name"
+      schema_field: "schema"
+      strict_field: "strict"
+
+models:
+  - name: "${AZURE_DEPLOYMENT_NAME}"
+    model_id: "${AZURE_DEPLOYMENT_NAME}"
+    display_name: "Azure OpenAI deployment"
+    max_tokens: 16384
+    temperature: 1.0
+    pricing_model:
+      usd_per1m_input_tokens: 1.25
+      usd_per1m_output_tokens: 10.0
+    special_handling:
+      supports_temperature: false
+
+embedding_models: []

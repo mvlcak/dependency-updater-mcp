@@ -16,7 +16,7 @@ public final class GradleParser {
      * don't pick up `id "com.foo.bar"` in the plugins block or similar noise.
      */
     private static final Set<String> GRADLE_CONFIGURATIONS = Set.of(
-            "implementation", "api", "compileOnly", "compileOnlyApi", "runtimeOnly",
+            "implementation", "dev/mvlcak/dependency_updater_mcp/api", "compileOnly", "compileOnlyApi", "runtimeOnly",
             "compile", "runtime", "providedCompile", "providedRuntime", "developmentOnly",
             "annotationProcessor", "kapt", "classpath",
             "testImplementation", "testApi", "testCompileOnly", "testRuntimeOnly",

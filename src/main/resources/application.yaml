@@ -1,4 +1,10 @@
 spring:
+  ai:
+    mcp:
+      server:
+        name: dependency-upgrader
+        version: 0.0.1
+        type: SYNC
   config:
     import: optional:file:env.properties
 embabel:
@@ -14,3 +20,6 @@ embabel:
 github:
     token: ${GITHUB_TOKEN:}
     endpoint: ${GITHUB_ENDPOINT:}
+
+dependency-upgrader:
+    push-enabled: ${PUSH_ENABLED:false}

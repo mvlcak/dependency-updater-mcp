@@ -40,6 +40,11 @@
 		</dependency>
 
 		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-web</artifactId>
+		</dependency>
+
+		<dependency>
 			<groupId>com.embabel.agent</groupId>
 			<artifactId>embabel-agent-starter</artifactId>
 			<version>${embabel-agent.version}</version>
@@ -52,19 +57,24 @@
 		</dependency>
 
 		<dependency>
+			<groupId>com.embabel.agent</groupId>
+			<artifactId>embabel-agent-starter-mcpserver</artifactId>
+			<version>${embabel-agent.version}</version>
+		</dependency>
+
+
+		<dependency>
 			<groupId>org.kohsuke</groupId>
 			<artifactId>github-api</artifactId>
 			<version>${github-api.version}</version>
 		</dependency>
 
-		<!-- Reads pom.xml into a typed Model. Brings plexus-utils for the XPP3 parser. -->
 		<dependency>
 			<groupId>org.apache.maven</groupId>
 			<artifactId>maven-model</artifactId>
 			<version>${maven-model.version}</version>
 		</dependency>
 
-		<!-- ComparableVersion: Maven's own ordering rules, for picking the lowest safe bump. -->
 		<dependency>
 			<groupId>org.apache.maven</groupId>
 			<artifactId>maven-artifact</artifactId>

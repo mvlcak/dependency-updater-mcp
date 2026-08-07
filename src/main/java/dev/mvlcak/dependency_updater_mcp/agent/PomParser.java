@@ -36,7 +36,7 @@ public final class PomParser {
         return parsePomForDeps(getContentOfFileFromRepo(repo, "pom.xml"));
     }
 
-    private static List<Dependency> parsePomForDeps(String content) {
+    static List<Dependency> parsePomForDeps(String content) {
         MavenXpp3Reader reader = new MavenXpp3Reader();
         Model model;
         try {
