@@ -5,6 +5,7 @@ spring:
         name: dependency-upgrader
         version: 0.0.1
         type: SYNC
+        protocol: streamable
   config:
     import: optional:file:env.properties
 embabel:
@@ -23,3 +24,5 @@ github:
 
 dependency-upgrader:
     push-enabled: ${PUSH_ENABLED:false}
+server:
+  port: ${SERVER_PORT:8080}
