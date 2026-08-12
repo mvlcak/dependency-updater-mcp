@@ -4,10 +4,10 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-public class DependencyUpgraderApplication {
+public class DependencyUpdaterMcpApplication {
 
 	public static void main(String[] args) {
-		SpringApplication.run(DependencyUpgraderApplication.class, args);
+		SpringApplication.run(DependencyUpdaterMcpApplication.class, args);
 	}
 
 }

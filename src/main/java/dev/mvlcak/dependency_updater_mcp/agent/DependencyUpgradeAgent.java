@@ -9,8 +9,7 @@ import com.embabel.agent.domain.io.UserInput;
 import dev.mvlcak.dependency_updater_mcp.domain.*;
 import dev.mvlcak.dependency_updater_mcp.osv.OsvClient;
 import dev.mvlcak.dependency_updater_mcp.tool.GitHubTools;
-import org.jetbrains.annotations.NotNull;
-import org.kohsuke.github.GHContent;
+import jakarta.validation.constraints.NotNull;
 import org.kohsuke.github.GHPullRequest;
 import org.kohsuke.github.GHRepository;
 import org.kohsuke.github.GitHub;
@@ -25,20 +24,8 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static dev.mvlcak.dependency_updater_mcp.agent.GradleParser.parseGradleForDeps;
-import static dev.mvlcak.dependency_updater_mcp.agent.PomParser.parsePomAndGetDependencies;
-
 /**
- * AGENT — Dependency upgrade / CVE remediation.
- *
- * Goal: the repo has no known-vulnerable dependencies AND still builds green.
- *
- * Marked below:
- *   [CODE] = no LLM. Ordinary Java. Deterministic, testable, free.
- *   [LLM]  = a real model call via context.ai(). The LLM may drive tools here.
- *
- * The point for the audience: only 3 of 8 actions touch a model.
- * The planner (GOAP) chooses the path between them without any LLM at all.
+ *  Dependency upgrade / CVE remediation.
  */
 @Agent(
         name = "dependency-upgrade",
@@ -54,16 +41,16 @@ public class DependencyUpgradeAgent {
     /** Handed to the LLM as a tool object — the model decides when to call it. */
     private final GitHubTools gitHubTools;
 
-    /** The same client, for [CODE] actions that call GitHub directly. No LLM involved. */
     private final GitHub gitHub;
 
     /** OSV.dev lookups. Deterministic — the model never gets a say in what counts as a CVE. */
     private final OsvClient osvClient;
 
-    /** Handed to git for the clone via GIT_ASKPASS, never embedded in a remote URL. */
     private final String githubToken;
 
-    /** Off by default. Nothing leaves this machine until someone turns it on. */
+    /**
+     * Off by default.
+     */
     private final boolean pushEnabled;
 
     public DependencyUpgradeAgent(GitHubTools gitHubTools,
@@ -78,16 +65,6 @@ public class DependencyUpgradeAgent {
         this.pushEnabled = pushEnabled;
     }
 
-    // ── ACTIONS ────────────────────────────────────────────────────────────────
-
-    /**
-     * [LLM + TOOL OBJECTS] Entry point. Turn a sentence ("check payments-service")
-     * into an owner and a repository name, searching GitHub if the user was vague.
-     *
-     * The model returns two strings and nothing else. It is not asked to produce a
-     * GHRepository: that is a live API object holding a reference to the HTTP client,
-     * so a model-constructed one arrives unattached and fails on first use.
-     */
     @Action
     RepoCoordinates findRepo(UserInput input, Ai ai) {
         return ai.withDefaultLlm()
@@ -95,7 +72,8 @@ public class DependencyUpgradeAgent {
                 .creating(RepoCoordinates.class)
                 .fromPrompt("""
                         Work out which GitHub repository the user means, and answer with its
-                        owner and name — nothing else, no URL, no "owner/name" in one field.
+                        owner and repository name — nothing else, no URL, no "owner/name" in
+                        one field.
 
                         Use the GitHub search tool if the request is ambiguous or gives only a
                         partial name. If the user states the owner and repository outright, just
@@ -107,11 +85,6 @@ public class DependencyUpgradeAgent {
                         .formatted(input.getContent()));
     }
 
-    /**
-     * [CODE] Resolve the name to a real repository through the authenticated client.
-     * A typo, a private repo the token cannot see, or a hallucinated name all fail
-     * here — loudly and cheaply — rather than three actions later.
-     */
     @Action
     GHRepository openRepo(RepoCoordinates coordinates) {
         try {
@@ -123,39 +96,16 @@ public class DependencyUpgradeAgent {
         }
     }
 
-    /**
-     * [CODE] Every direct AND transitive dependency with the version actually on the
-     * classpath, asked of the build tool in the clone rather than read out of the file.
-     *
-     * Reading the file is not enough: under a parent POM or a BOM most declarations
-     * carry no version, so a static parse of a Spring Boot project leaves the scanner
-     * almost nothing to work with. Resolving properly also brings in the transitive
-     * graph, which is where most advisories actually are.
-     */
     @Action
     Manifest readManifest(BuildWorkspace workspace) {
         return new Manifest(workspace.buildFile(), workspace.resolveDependencies());
     }
 
-    /**
-     * [CODE] Send the manifest to OSV.dev (or your Nexus/Snyk/Artifactory scanner)
-     * and return the CVEs that actually apply, with severity and the fixed version.
-     * Returns an empty report if the repo is already clean — which satisfies the
-     * goal immediately and lets the planner skip everything below. Good thing to
-     * demo: run it on a clean repo and show the short plan.
-     */
     @Action(post = "upgradesRemain")
     VulnerabilityReport scan(Manifest manifest) {
         return new VulnerabilityReport(osvClient.findVulnerabilities(manifest.dependencies()));
     }
 
-    /**
-     * [LLM] Decide WHICH upgrade to attempt first when several CVEs are open.
-     * Weigh severity against blast radius (a test-scoped lib is safer than a
-     * framework core), and pick the smallest version bump that clears the CVE.
-     * Returns one ProposedUpgrade — deliberately one at a time, so a failure
-     * is attributable. Use a low temperature and a cheap model.
-     */
     @Action(canRerun = true, pre = "upgradesRemain", post = {"allUpgradesAddressed", "isMajorBump"})
     ProposedUpgrade chooseUpgrade(VulnerabilityReport report, Manifest manifest, OperationContext ctx) {
         List<UpgradeShortlist.Candidate> candidates = UpgradeShortlist.from(report, attemptedCoordinates(ctx));
@@ -186,14 +136,6 @@ public class DependencyUpgradeAgent {
         return toProposedUpgrade(choice, candidates);
     }
 
-    /**
-     * [LLM + WEB TOOLS] Only planned when isMajorBump is true.
-     * Search the web for the library's migration guide and release notes between
-     * the current and target version, and extract the breaking changes that are
-     * likely to affect this codebase. Attach CoreToolGroups.WEB so the model can
-     * fetch pages itself. Feeds the repair step below with real context instead
-     * of letting it guess from the stack trace.
-     */
     @Action(pre = "isMajorBump")
     MigrationNotes researchMigration(ProposedUpgrade upgrade, OperationContext ctx) {
         String coordinate = upgrade.current().group() + ":" + upgrade.current().artifact();
@@ -247,23 +189,11 @@ public class DependencyUpgradeAgent {
         return notes;
     }
 
-    /**
-     * [CODE] Clone the repo to a temp directory and prove it builds BEFORE anything
-     * is changed. If the pristine tree is red there is no honest signal to be had —
-     * every later failure would be unattributable — so this fails the run outright.
-     * Everything downstream that touches files goes through the workspace it returns.
-     */
     @Action
     BuildWorkspace checkout(GHRepository repo) {
         return BuildWorkspace.checkout(repo, githubToken);
     }
 
-    /**
-     * [CODE] Edit the version in the manifest and run the build (`mvnw -B -ntp verify`).
-     * Capture exit code, failing test names, and the compiler/test output.
-     * This is the oracle — the whole demo rests on this being real and honest.
-     * Deterministic on purpose: your code triggers this tool, not the model.
-     */
     @Action(canRerun = true, post = {"buildGreen", "buildFailed"})
     BuildResult applyAndBuild(ProposedUpgrade upgrade, BuildWorkspace workspace) {
         workspace.applyVersion(upgrade);
@@ -286,21 +216,12 @@ public class DependencyUpgradeAgent {
         return result;
     }
 
-    /**
-     * [CODE + LLM] Goal. Only reachable on a green build.
-     * Commit on a branch, push, and open a draft PR. The LLM writes the title and
-     * body: which CVE this closes, what changed and why, what a reviewer should
-     * look at hardest. Everything else is a plain API call.
-     *
-     * Keep it a DRAFT and gate the push behind confirmation — in the presentation
-     * that reads as good engineering rather than a limitation.
-     */
     @Action(pre = {"buildGreen", "allUpgradesAddressed"})
-    @AchievesGoal(description = "Vulnerable dependencies upgraded, build green, PR open for review",
+    @AchievesGoal(description = "Updates dependencies of either Maven or Gradle project in Github repository for Github user to mitigate CVEs",
             export = @Export(
                     name = "upgrade_dependencies",
                     remote = true,
-                    startingInputTypes = {UserInput.class}))
+                    startingInputTypes = {RepoCoordinates.class}))
     PullRequest raisePullRequest(GHRepository repo,
                                  BuildWorkspace workspace,
                                  BuildResult result,
@@ -395,15 +316,6 @@ public class DependencyUpgradeAgent {
 
     /**
      * True while at least one vulnerable dependency has not yet been proposed.
-     *
-     * This is what makes the loop turn. chooseUpgrade is gated on it and marked
-     * canRerun, so after each green build the planner comes back here, finds work
-     * left, and plans another pass. When it finally goes false, the only action
-     * still available is the goal.
-     *
-     * Note it reads the blackboard rather than any single action's output: every
-     * ProposedUpgrade ever produced in this run is still there, so "what have we
-     * already tried" is simply a query, not state we have to thread through types.
      */
     @Condition(name = "upgradesRemain")
     boolean upgradesRemain(OperationContext ctx) {
@@ -519,19 +431,9 @@ public class DependencyUpgradeAgent {
         }
         try {
             return Integer.valueOf(parts[index]);
-        } catch (NumberFormatException e) {
+        } catch (NumberFormatException _) {
             return null;
         }
-    }
-
-    private Manifest parseGradleAndGetDependencies(GHRepository repo, String fileName) {
-        List<Dependency> dependencies;
-        String content;
-        content = getContentOfFileFromRepo(repo, fileName);
-
-        dependencies = parseGradleForDeps(content);
-
-        return new Manifest(fileName, dependencies);
     }
 
     /** Renders the shortlist as compact text. The model sees only vetted facts. */
