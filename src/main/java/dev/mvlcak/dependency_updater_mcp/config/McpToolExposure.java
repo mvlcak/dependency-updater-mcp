@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -21,8 +22,11 @@ import java.util.List;
  *
  * <p>Embabel exposes its tools on {@code ContextRefreshedEvent}, so stripping the
  * rest on {@link ApplicationReadyEvent} runs afterwards and is the last word.
+ * {@link UpgradeDependenciesTool} then re-registers the surviving tool with its
+ * schemas, which is why the two are explicitly ordered.
  */
 @Component
+@Order(0)
 public class McpToolExposure {
 
     private static final Logger log = LoggerFactory.getLogger(McpToolExposure.class);
