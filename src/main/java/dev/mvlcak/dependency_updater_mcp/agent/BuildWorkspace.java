@@ -55,6 +55,14 @@ public final class BuildWorkspace implements AutoCloseable {
     /** Build logs go into an LLM prompt. Keep the tail — the failure is always at the end. */
     private static final int MAX_OUTPUT_CHARS = 20_000;
 
+    /**
+     * Presentation switch: {@code -Ddemo.failNextBuild=true} makes ONE upgrade build report red
+     * without running, so the planner's recovery branch can be demonstrated on a repo that
+     * happens to upgrade cleanly. It clears itself after firing, and it is deliberately ignored
+     * for the baseline build — see {@link #build()}.
+     */
+    private static final String FAIL_NEXT_BUILD = "demo.failNextBuild";
+
     /** `<version>` is absent when a parent BOM manages it; we insert one after this. */
     private static final Pattern DEPENDENCY_BLOCK =
             Pattern.compile("<dependency>(.*?)</dependency>", Pattern.DOTALL);
@@ -608,8 +616,16 @@ public final class BuildWorkspace implements AutoCloseable {
      * version the project is known to work with, which is the entire point of it being
      * committed. Batch mode matters too — without it the output carries ANSI escapes
      * straight into the repair prompt.
+     *
+     * Honest in every configuration except one: {@code -Ddemo.failNextBuild=true}, which fakes
+     * a single red result for a talk. Off unless someone asks for it on the command line.
      */
     BuildResult build() {
+        BuildResult staged = stagedFailure();
+        if (staged != null) {
+            return staged;
+        }
+
         List<String> command = tool == BuildTool.MAVEN
                 ? List.of(wrapperOr("mvnw", "mvn"), "-B", "-ntp", "verify")
                 : List.of(wrapperOr("gradlew", "gradle"), "--no-daemon", "--console=plain", "build");
@@ -642,6 +658,37 @@ public final class BuildWorkspace implements AutoCloseable {
             return onPath;
         }
         return candidate.toString();
+    }
+
+    /**
+     * A faked red build for a live demo, or null — which is every normal run.
+     *
+     * Only the upgrade builds can be staged, never the baseline: {@code baseline == null} marks
+     * the pre-flight probe, and a red probe aborts the whole run before an upgrade is ever
+     * chosen. Faking that one would demonstrate nothing but an exception.
+     *
+     * The flag is cleared as it fires, so the recovery path gets exactly one red build to react
+     * to and the build after the revert is a real one.
+     */
+    private BuildResult stagedFailure() {
+        if (baseline == null || !Boolean.getBoolean(FAIL_NEXT_BUILD)) {
+            return null;
+        }
+        System.clearProperty(FAIL_NEXT_BUILD);
+        log.warn("DEMO: -D{}=true — reporting RED without running a build. The flag is now cleared, "
+                + "so the next build is real.", FAIL_NEXT_BUILD);
+
+        return new BuildResult(false, 1,
+                List.of("com.example.CompatibilityTest.oldApiStillWorks"),
+                """
+                        DEMO BUILD — nothing was executed (-D%s=true).
+
+                        [ERROR] src/main/java/com/example/Service.java:[42,17] cannot find symbol
+                          symbol:   method withDefaults()
+                          location: class com.example.Config
+                        [ERROR] Failed to execute goal org.apache.maven.plugins:maven-compiler-plugin:compile \
+                        (default-compile) on project demo: Compilation failure
+                        """.formatted(FAIL_NEXT_BUILD));
     }
 
     /** Test names only. A compile failure has none, and the exit code already says so. */

@@ -97,6 +97,11 @@ public class DependencyUpgradeAgent {
     }
 
     @Action
+    BuildWorkspace checkout(GHRepository repo) {
+        return BuildWorkspace.checkout(repo, githubToken);
+    }
+
+    @Action
     Manifest readManifest(BuildWorkspace workspace) {
         return new Manifest(workspace.buildFile(), workspace.resolveDependencies());
     }
@@ -108,7 +113,7 @@ public class DependencyUpgradeAgent {
 
     @Action(canRerun = true, pre = "upgradesRemain", post = {"allUpgradesAddressed", "isMajorBump"})
     ProposedUpgrade chooseUpgrade(VulnerabilityReport report, Manifest manifest, OperationContext ctx) {
-        List<UpgradeShortlist.Candidate> candidates = UpgradeShortlist.from(report, attemptedCoordinates(ctx));
+        List<UpgradeShortlist.Candidate> candidates = UpgradeShortlist.from(report, attemptedUpgrades(ctx));
         if (candidates.isEmpty()) {
             // The upgradesRemain precondition should have stopped us being planned at all.
             throw new IllegalStateException("chooseUpgrade planned with nothing left to upgrade");
@@ -136,64 +141,6 @@ public class DependencyUpgradeAgent {
         return toProposedUpgrade(choice, candidates);
     }
 
-    @Action(pre = "isMajorBump")
-    MigrationNotes researchMigration(ProposedUpgrade upgrade, OperationContext ctx) {
-        String coordinate = upgrade.current().group() + ":" + upgrade.current().artifact();
-
-        MigrationNotes notes = ctx.ai().withDefaultLlm()
-                .withToolGroup(CoreToolGroups.WEB)
-                .creating(MigrationNotes.class)
-                .fromPrompt("""
-                        You are researching a MAJOR version bump before it is applied to a Java codebase.
-
-                        Library:  %s
-                        Moving:   %s  ->  %s
-                        Reason:   closes %s
-
-                        Search for that library's OFFICIAL release notes, migration guide, or changelog
-                        covering everything between those two versions. Prefer the project's own site,
-                        GitHub releases, or repository docs over blog posts and Stack Overflow.
-
-                        Report ONLY changes that can break code that COMPILES against %s today:
-                          - classes/methods/fields removed, renamed, or moved to another package
-                          - changed method signatures, return types, or checked exceptions
-                          - changed runtime defaults that alter behaviour without a compile error
-                          - a raised minimum JDK or Jakarta/javax namespace switch
-                          - required companion upgrades in sibling artifacts
-
-                        Ignore new features, performance work, and deprecations that still compile.
-
-                        Every entry in breakingChanges must be traceable to a page you actually fetched,
-                        and that page's URL must appear in sourceUrls. If you cannot find real release
-                        notes, return an empty breakingChanges list and say so in the summary. An honest
-                        "not found" is useful; an invented API change sends the repair step chasing a
-                        method that never existed.
-                        """
-                        .formatted(
-                                coordinate,
-                                upgrade.current().version(),
-                                upgrade.targetVersion(),
-                                upgrade.cveId(),
-                                upgrade.current().version()));
-
-        // Uncited claims are worse than no claims — repair treats these notes as fact.
-        if (!notes.breakingChanges().isEmpty() && notes.sourceUrls().isEmpty()) {
-            log.warn("Migration research for {} returned {} breaking changes with no sources — discarding them",
-                    coordinate, notes.breakingChanges().size());
-            return new MigrationNotes(notes.summary(), List.of(), List.of());
-        }
-
-        log.info("Migration research for {} {} -> {}: {} breaking changes from {} sources",
-                coordinate, upgrade.current().version(), upgrade.targetVersion(),
-                notes.breakingChanges().size(), notes.sourceUrls().size());
-        return notes;
-    }
-
-    @Action
-    BuildWorkspace checkout(GHRepository repo) {
-        return BuildWorkspace.checkout(repo, githubToken);
-    }
-
     @Action(canRerun = true, post = {"buildGreen", "buildFailed"})
     BuildResult applyAndBuild(ProposedUpgrade upgrade, BuildWorkspace workspace) {
         workspace.applyVersion(upgrade);
@@ -214,6 +161,57 @@ public class DependencyUpgradeAgent {
         // A red tree is deliberately left as it is: repair needs to see the breakage,
         // and rewinding is the job of whichever action decides to give up on it.
         return result;
+    }
+
+    /**
+     * Give up on an upgrade that will not build, and hand the planner a green tree again.
+     *
+     * Nothing calls this. It gets *planned*: after a red build `buildFailed` is true and
+     * this is the only other action that can produce `buildGreen`, which the goal needs.
+     */
+    @Action(canRerun = true, pre = "buildFailed", post = "buildGreen")
+    BuildResult abandonFailedUpgrade(ProposedUpgrade upgrade,
+                                     BuildWorkspace workspace,
+                                     OperationContext ctx) {
+        log.warn("Giving up on {}:{} -> {} — reverting to {}",
+                upgrade.current().group(), upgrade.current().artifact(),
+                upgrade.targetVersion(), workspace.lastGreenSha());
+
+        BuildResult red = ctx.last(BuildResult.class);
+        workspace.revertToLastGreen();
+
+        // The evidence that the reverted tree is green is a build we already ran: the one
+        // that earned the last checkpoint, or the baseline taken before anything was edited.
+        // Not a fabricated success, and not another 15-minute build on stage.
+        BuildResult evidence = ctx.objectsOfType(BuildResult.class).stream()
+                .filter(BuildResult::passed)
+                .reduce((earlier, later) -> later)
+                .orElse(workspace.baseline());
+
+        // Record the abandonment on the branch. The revert leaves the tree byte-identical to
+        // the base, so without a commit here the branch holds nothing and raisePullRequest —
+        // the step the planner replans to next — has nothing to open and fails the run. An
+        // empty commit is the cheapest honest way to say "attempted, rejected, here is why".
+        workspace.checkpoint("""
+            Abandon %s:%s %s -> %s
+            
+            This upgrade would close %s, but the build did not survive it:
+            exit %d, failing tests: %s.
+            
+            The working tree was reverted, so %s is still open and needs a human."""
+                .formatted(upgrade.current().group(), upgrade.current().artifact(),
+                        upgrade.current().version(), upgrade.targetVersion(),
+                        upgrade.cveId(),
+                        red == null ? -1 : red.exitCode(),
+                        red == null || red.failingTests().isEmpty()
+                                ? "none reported (the build failed before the tests ran)"
+                                : String.join(", ", red.failingTests()),
+                        upgrade.cveId()));
+
+        return new BuildResult(true, 0, List.of(),
+                "Abandoned %s:%s -> %s and reverted to %s. That commit built green:%n%s"
+                        .formatted(upgrade.current().group(), upgrade.current().artifact(),
+                                upgrade.targetVersion(), workspace.lastGreenSha(), evidence.output()));
     }
 
     @Action(pre = {"buildGreen", "allUpgradesAddressed"})
@@ -327,7 +325,7 @@ public class DependencyUpgradeAgent {
             log.warn("Upgrade budget of {} exhausted — stopping while work remains", MAX_UPGRADE_ATTEMPTS);
             return false;
         }
-        return !UpgradeShortlist.from(report, attemptedCoordinates(ctx)).isEmpty();
+        return !UpgradeShortlist.from(report, attemptedUpgrades(ctx)).isEmpty();
     }
 
     /**
@@ -483,10 +481,22 @@ public class DependencyUpgradeAgent {
                 choice.rationale());
     }
 
-    /** "group:artifact" for every upgrade proposed so far in this run, from the blackboard. */
-    private Set<String> attemptedCoordinates(OperationContext ctx) {
+    /**
+     * "group:artifact:targetVersion" for every upgrade proposed so far in this run.
+     *
+     * Keyed by version, not by coordinate. A red build rules out the version that was
+     * applied, not the dependency: the other fix versions have never been tried. Retiring
+     * the whole coordinate on the first failure means a repo with a single vulnerable
+     * dependency has nowhere to replan to after abandonFailedUpgrade — upgradesRemain goes
+     * false, the branch holds no commits, and raisePullRequest has nothing to open.
+     *
+     * Termination still comes from retryBudgetExhausted plus an exhausted shortlist, since
+     * every attempt puts one more ProposedUpgrade on the blackboard.
+     */
+    private Set<String> attemptedUpgrades(OperationContext ctx) {
         return ctx.objectsOfType(ProposedUpgrade.class).stream()
-                .map(upgrade -> upgrade.current().group() + ":" + upgrade.current().artifact())
+                .map(upgrade -> upgrade.current().group() + ":" + upgrade.current().artifact()
+                        + ":" + upgrade.targetVersion())
                 .collect(Collectors.toSet());
     }
 }

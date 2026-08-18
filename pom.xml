@@ -9,7 +9,7 @@
 		<relativePath/> <!-- lookup parent from repository -->
 	</parent>
 	<groupId>dev.mvlcak</groupId>
-	<artifactId>dependnecy-updater-mcp</artifactId>
+	<artifactId>dependency-updater-mcp</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
 	<name/>
 	<description/>

@@ -64,9 +64,12 @@ public final class UpgradeShortlist {
     /**
      * Groups findings by dependency and ranks them.
      *
-     * @param alreadyAttempted coordinates ("group:artifact") already proposed in this run.
-     *                         Read from the blackboard by the caller, so the loop never
-     *                         proposes the same dependency twice.
+     * @param alreadyAttempted upgrades ("group:artifact:targetVersion") already proposed in
+     *                         this run. Read from the blackboard by the caller. Keyed by
+     *                         version, not by coordinate: a bump that went red rules out
+     *                         that target version, not the dependency — the remaining fix
+     *                         versions are still worth attempting. A dependency drops off
+     *                         the shortlist only once every one of them has been tried.
      */
     public static List<Candidate> from(VulnerabilityReport report, Set<String> alreadyAttempted) {
         Map<String, List<Finding>> byCoordinate = new LinkedHashMap<>();
@@ -76,25 +79,31 @@ public final class UpgradeShortlist {
                 continue;
             }
             String coordinate = finding.affected().group() + ":" + finding.affected().artifact();
-            if (alreadyAttempted.contains(coordinate)) {
-                continue;
-            }
             byCoordinate.computeIfAbsent(coordinate, key -> new ArrayList<>()).add(finding);
         }
 
         List<Candidate> candidates = new ArrayList<>();
-        for (List<Finding> findings : byCoordinate.values()) {
+        for (Map.Entry<String, List<Finding>> entry : byCoordinate.entrySet()) {
+            List<Finding> findings = entry.getValue();
             // Sorted set in Maven order: 2.12.7.1 above 2.12.7, 1.0-rc1 below 1.0.
             TreeSet<String> fixVersions = new TreeSet<>(Comparator.comparing(ComparableVersion::new));
             List<String> cveIds = new ArrayList<>();
             String worstSeverity = "UNKNOWN";
 
             for (Finding finding : findings) {
-                fixVersions.add(finding.fixedInVersion());
+                if (!alreadyAttempted.contains(entry.getKey() + ":" + finding.fixedInVersion())) {
+                    fixVersions.add(finding.fixedInVersion());
+                }
+                // The CVE stays on the record either way. It is still open — the attempt to
+                // close it failed — and it is still what makes this dependency worth moving.
                 cveIds.add(finding.cveId());
                 if (rankOf(finding.severity()) < rankOf(worstSeverity)) {
                     worstSeverity = finding.severity();
                 }
+            }
+            // Every known fix has been attempted. There is nothing left to propose here.
+            if (fixVersions.isEmpty()) {
+                continue;
             }
             candidates.add(new Candidate(
                     findings.getFirst().affected(),
